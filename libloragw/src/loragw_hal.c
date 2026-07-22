@@ -879,6 +879,9 @@ int lgw_start(void) {
         return LGW_HAL_ERROR;
     }
 
+    /* Read board diagnostic info (before radio calibration changes state) */
+    sx1302_read_board_info();
+
     /* Calibrate radios */
     err = sx1302_radio_calibrate(&CONTEXT_RF_CHAIN[0], CONTEXT_BOARD.clksrc, &CONTEXT_TX_GAIN_LUT[0]);
     if (err != LGW_REG_SUCCESS) {

@@ -112,6 +112,13 @@ int sx1302_get_eui(uint64_t * eui);
 int sx1302_get_model_id(sx1302_model_id_t * model_id);
 
 /**
+@brief Read and print SX1302 board diagnostic info (chip version, GPIO inputs, model ID)
+@param N/A
+@return LGW_REG_SUCCESS if no error, LGW_REG_ERROR otherwise
+*/
+int sx1302_read_board_info(void);
+
+/**
 @brief Check AGC & ARB MCUs parity error, and update timestamp counter wraping status
 @brief This function needs to be called regularly (every few seconds) by the upper layer
 @param N/A

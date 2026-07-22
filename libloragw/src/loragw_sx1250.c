@@ -140,17 +140,28 @@ int sx1250_setup(uint8_t rf_chain, uint32_t freq_hz, bool single_input_mode) {
     uint8_t buff[16];
     int err = LGW_REG_SUCCESS;
 
-    /* Set Radio in Standby for calibrations */
-    buff[0] = (uint8_t)STDBY_RC;
-    err |= sx1250_reg_w(SET_STANDBY, buff, 1, rf_chain);
-    wait_ms(10);
+    /* Set Radio in Standby for calibrations — with retry for slow-starting boards */
+    {
+        int retry;
+        for (retry = 0; retry < 5; retry++) {
+            buff[0] = (uint8_t)STDBY_RC;
+            err |= sx1250_reg_w(SET_STANDBY, buff, 1, rf_chain);
+            wait_ms(50 + retry * 50); /* 50ms, 100ms, 150ms, 200ms, 250ms */
 
-    /* Get status to check Standby mode has been properly set */
-    buff[0] = 0x00;
-    err |= sx1250_reg_r(GET_STATUS, buff, 1, rf_chain);
-    if ((uint8_t)(TAKE_N_BITS_FROM(buff[0], 4, 3)) != 0x02) {
-        printf("ERROR: Failed to set SX1250_%u in STANDBY_RC mode\n", rf_chain);
-        return LGW_REG_ERROR;
+            /* Get status to check Standby mode has been properly set */
+            buff[0] = 0x00;
+            err |= sx1250_reg_r(GET_STATUS, buff, 1, rf_chain);
+            printf("INFO: SX1250_%u STANDBY_RC attempt %d: status=0x%02X (mode=%u)\n",
+                   rf_chain, retry + 1, buff[0], (uint8_t)(TAKE_N_BITS_FROM(buff[0], 4, 3)));
+            if ((uint8_t)(TAKE_N_BITS_FROM(buff[0], 4, 3)) == 0x02) {
+                break; /* Success */
+            }
+        }
+        if (retry >= 5) {
+            printf("ERROR: Failed to set SX1250_%u in STANDBY_RC mode after %d attempts (last status=0x%02X)\n",
+                   rf_chain, retry, buff[0]);
+            return LGW_REG_ERROR;
+        }
     }
 
     /* Run all calibrations (TCXO) */
@@ -158,17 +169,27 @@ int sx1250_setup(uint8_t rf_chain, uint32_t freq_hz, bool single_input_mode) {
     err |= sx1250_reg_w(CALIBRATE, buff, 1, rf_chain);
     wait_ms(10);
 
-    /* Set Radio in Standby with XOSC ON */
-    buff[0] = (uint8_t)STDBY_XOSC;
-    err |= sx1250_reg_w(SET_STANDBY, buff, 1, rf_chain);
-    wait_ms(10);
+    /* Set Radio in Standby with XOSC ON — with retry */
+    {
+        int retry;
+        for (retry = 0; retry < 5; retry++) {
+            buff[0] = (uint8_t)STDBY_XOSC;
+            err |= sx1250_reg_w(SET_STANDBY, buff, 1, rf_chain);
+            wait_ms(50 + retry * 50);
 
-    /* Get status to check Standby mode has been properly set */
-    buff[0] = 0x00;
-    err |= sx1250_reg_r(GET_STATUS, buff, 1, rf_chain);
-    if ((uint8_t)(TAKE_N_BITS_FROM(buff[0], 4, 3)) != 0x03) {
-        printf("ERROR: Failed to set SX1250_%u in STANDBY_XOSC mode\n", rf_chain);
-        return LGW_REG_ERROR;
+            buff[0] = 0x00;
+            err |= sx1250_reg_r(GET_STATUS, buff, 1, rf_chain);
+            printf("INFO: SX1250_%u STANDBY_XOSC attempt %d: status=0x%02X (mode=%u)\n",
+                   rf_chain, retry + 1, buff[0], (uint8_t)(TAKE_N_BITS_FROM(buff[0], 4, 3)));
+            if ((uint8_t)(TAKE_N_BITS_FROM(buff[0], 4, 3)) == 0x03) {
+                break;
+            }
+        }
+        if (retry >= 5) {
+            printf("ERROR: Failed to set SX1250_%u in STANDBY_XOSC mode after %d attempts (last status=0x%02X)\n",
+                   rf_chain, retry, buff[0]);
+            return LGW_REG_ERROR;
+        }
     }
 
     /* Set Bitrate to maximum (to lower TX to FS switch time) */

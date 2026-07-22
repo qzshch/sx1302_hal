@@ -328,6 +328,57 @@ int sx1302_get_model_id(sx1302_model_id_t * model_id) {
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
+int sx1302_read_board_info(void) {
+    int err;
+    int32_t val;
+    uint8_t chip_version;
+    uint8_t gpio_in_h, gpio_in_l;
+    sx1302_model_id_t model_id;
+
+    printf("INFO: === SX1302 Board Diagnostics ===\n");
+
+    /* Read chip version (register 0x5606) */
+    err = lgw_reg_r(SX1302_REG_COMMON_VERSION_VERSION, &val);
+    if (err == LGW_REG_SUCCESS) {
+        chip_version = (uint8_t)val;
+        printf("INFO: SX1302 chip version: 0x%02X (v%u.%u)\n",
+               chip_version, (chip_version >> 4) & 0x0F, chip_version & 0x0F);
+    } else {
+        printf("WARNING: failed to read SX1302 chip version\n");
+    }
+
+    /* Read GPIO input values (before sx1302_config_gpio reconfigures them) */
+    err = lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_H_IN_VALUE, &val);
+    if (err == LGW_REG_SUCCESS) {
+        gpio_in_h = (uint8_t)val;
+    } else {
+        gpio_in_h = 0xFF;
+    }
+    err = lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_L_IN_VALUE, &val);
+    if (err == LGW_REG_SUCCESS) {
+        gpio_in_l = (uint8_t)val;
+    } else {
+        gpio_in_l = 0xFF;
+    }
+    printf("INFO: SX1302 GPIO input: H=0x%02X L=0x%02X (combined=0x%04X)\n",
+           gpio_in_h, gpio_in_l, ((uint16_t)gpio_in_h << 8) | gpio_in_l);
+
+    /* Read model ID from OTP */
+    err = sx1302_get_model_id(&model_id);
+    if (err == LGW_REG_SUCCESS) {
+        printf("INFO: SX1302 model ID: 0x%02X (%s)\n",
+               (uint8_t)model_id,
+               (model_id == CHIP_MODEL_ID_SX1303) ? "SX1303" : "SX1302");
+    } else {
+        printf("WARNING: failed to read SX1302 model ID\n");
+    }
+
+    printf("INFO: === End Board Diagnostics ===\n");
+    return LGW_REG_SUCCESS;
+}
+
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+
 int sx1302_update(void) {
     uint32_t inst, pps;
     /* performances variables */
