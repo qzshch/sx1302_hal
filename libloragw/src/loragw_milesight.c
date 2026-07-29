@@ -264,19 +264,11 @@ int ms_sx1250_setup(uint8_t rf_chain, uint32_t freq_hz, bool single_input_mode) 
     err |= sx1250_reg_w(SET_TX_PARAMS, buff, 2, rf_chain);
 
     /*
-     * Phase 8: Set frequency + enter RX continuous mode.
-     * This is identical to the upstream sx1250_setup() tail.
+     * Phase 8: Radio configuration for RX — MUST match upstream order exactly.
+     * Order: bitrate → DIO → gain → frequency → freq_offset → SET_RX → single_input → FPGA_MODE
      */
-    {
-        int32_t freq_reg = SX1250_FREQ_TO_REG(freq_hz);
-        buff[0] = (uint8_t)(freq_reg >> 24);
-        buff[1] = (uint8_t)(freq_reg >> 16);
-        buff[2] = (uint8_t)(freq_reg >> 8);
-        buff[3] = (uint8_t)(freq_reg >> 0);
-        err |= sx1250_reg_w(SET_RF_FREQUENCY, buff, 4, rf_chain);
-    }
 
-    /* Set max bitrate (to lower TX→FS switch time) — from upstream */
+    /* Set max bitrate (to lower TX→FS switch time) */
     buff[0] = 0x06; buff[1] = 0xA1; buff[2] = 0x01;
     err |= sx1250_reg_w(WRITE_REGISTER, buff, 3, rf_chain);
     buff[0] = 0x06; buff[1] = 0xA2; buff[2] = 0x00;
@@ -284,7 +276,7 @@ int ms_sx1250_setup(uint8_t rf_chain, uint32_t freq_hz, bool single_input_mode) 
     buff[0] = 0x06; buff[1] = 0xA3; buff[2] = 0x00;
     err |= sx1250_reg_w(WRITE_REGISTER, buff, 3, rf_chain);
 
-    /* Configure DIOs — from upstream */
+    /* Configure DIOs */
     buff[0] = 0x05; buff[1] = 0x82; buff[2] = 0x00;
     err |= sx1250_reg_w(WRITE_REGISTER, buff, 3, rf_chain);
     buff[0] = 0x05; buff[1] = 0x83; buff[2] = 0x00;
@@ -300,7 +292,21 @@ int ms_sx1250_setup(uint8_t rf_chain, uint32_t freq_hz, bool single_input_mode) 
     buff[0] = 0x08; buff[1] = 0xB6; buff[2] = 0x2A;
     err |= sx1250_reg_w(WRITE_REGISTER, buff, 3, rf_chain);
 
-    /* Enter RX continuous mode */
+    /* Set frequency */
+    {
+        int32_t freq_reg = SX1250_FREQ_TO_REG(freq_hz);
+        buff[0] = (uint8_t)(freq_reg >> 24);
+        buff[1] = (uint8_t)(freq_reg >> 16);
+        buff[2] = (uint8_t)(freq_reg >> 8);
+        buff[3] = (uint8_t)(freq_reg >> 0);
+        err |= sx1250_reg_w(SET_RF_FREQUENCY, buff, 4, rf_chain);
+    }
+
+    /* Set frequency offset to 0 — CRITICAL: upstream always does this */
+    buff[0] = 0x08; buff[1] = 0x8F; buff[2] = 0x00; buff[3] = 0x00; buff[4] = 0x00;
+    err |= sx1250_reg_w(WRITE_REGISTER, buff, 5, rf_chain);
+
+    /* Enter RX continuous mode — provides clock to SX1302 */
     buff[0] = 0xFF; buff[1] = 0xFF; buff[2] = 0xFF;
     err |= sx1250_reg_w(SET_RX, buff, 3, rf_chain);
 
