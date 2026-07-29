@@ -28,6 +28,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include "loragw_hal.h"
 #include "loragw_sx1302.h"
 #include "loragw_sx1302_timestamp.h"
+#include "loragw_milesight.h"
 #include "loragw_sx1302_rx.h"
 #include "loragw_sx1250.h"
 #include "loragw_agc_params.h"
@@ -626,8 +627,11 @@ int sx1302_pa_lna_lut_configure(struct lgw_conf_board_s * context_board) {
 
     /* Configure LUT Table A */
     if (context_board->full_duplex == true) {
-        err |= lgw_reg_w(SX1302_REG_AGC_MCU_LUT_TABLE_A_PA_LUT, 0x0C);     /* Enable PA: RADIO_CTRL[2] is high when PA_EN=1 */
-        err |= lgw_reg_w(SX1302_REG_AGC_MCU_LUT_TABLE_A_LNA_LUT, 0x0F);    /* Enable LNA: RADIO_CTRL[1] is always high */
+        /* Milesight values: PA_LUT=0x08 (RADIO_CTRL[3] high when PA_EN=1),
+         * LNA_LUT=0x06 (RADIO_CTRL[1]+[2] high when PA_EN=0 & LNA_EN=1).
+         * These differ from upstream (0x0C/0x0F) to match Milesight PA circuit. */
+        err |= lgw_reg_w(SX1302_REG_AGC_MCU_LUT_TABLE_A_PA_LUT, 0x08);
+        err |= lgw_reg_w(SX1302_REG_AGC_MCU_LUT_TABLE_A_LNA_LUT, 0x06);
     } else {
         err |= lgw_reg_w(SX1302_REG_AGC_MCU_LUT_TABLE_A_PA_LUT, 0x04);     /* Enable PA: RADIO_CTRL[2] is high when PA_EN=1 */
         err |= lgw_reg_w(SX1302_REG_AGC_MCU_LUT_TABLE_A_LNA_LUT, 0x02);    /* Enable LNA: RADIO_CTRL[1] is high when PA_EN=0 & LNA_EN=1 */
@@ -2532,6 +2536,14 @@ int sx1302_send(lgw_radio_type_t radio_type, struct lgw_tx_gain_lut_s * tx_lut, 
     }
     err = lgw_reg_w(SX1302_REG_TX_TOP_AGC_TX_PWR_AGC_TX_PWR(pkt_data->rf_chain), power);
     CHECK_ERR(err);
+
+    /* Milesight ur_pa TX control — direct SX1250 register writes for PA */
+    if (radio_type == LGW_RADIO_TYPE_SX1250 && ms_get_board_info()->detected) {
+        err = ms_tx_pa_control(pkt_data->rf_chain, tx_lut->lut[pow_index].pa_gain, tx_lut->lut[pow_index].pwr_idx);
+        if (err != 0) {
+            printf("WARNING: Milesight ur_pa TX control failed (chain=%u)\n", pkt_data->rf_chain);
+        }
+    }
 
     /* Set digital gain */
     err = lgw_reg_w(SX1302_REG_TX_TOP_TX_RFFE_IF_IQ_GAIN_IQ_GAIN(pkt_data->rf_chain), tx_lut->lut[pow_index].dig_gain);

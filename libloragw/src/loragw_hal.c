@@ -38,6 +38,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include "loragw_aux.h"
 #include "loragw_com.h"
 #include "loragw_i2c.h"
+#include "loragw_milesight.h"
 #include "loragw_lbt.h"
 #include "loragw_sx1250.h"
 #include "loragw_sx125x.h"
@@ -480,6 +481,7 @@ int lgw_board_setconf(struct lgw_conf_board_s * conf) {
     CONTEXT_BOARD.full_duplex = conf->full_duplex;
     CONTEXT_COM_TYPE = conf->com_type;
     strncpy(CONTEXT_COM_PATH, conf->com_path, sizeof CONTEXT_COM_PATH);
+    CONTEXT_BOARD.milesight_mode = conf->milesight_mode;
     CONTEXT_COM_PATH[sizeof CONTEXT_COM_PATH - 1] = '\0'; /* ensure string termination */
 
     DEBUG_PRINTF("Note: board configuration: com_type: %s, com_path: %s, lorawan_public:%d, clksrc:%d, full_duplex:%d\n",   (CONTEXT_COM_TYPE == LGW_COM_SPI) ? "SPI" : "USB",
@@ -872,6 +874,19 @@ int lgw_start(void) {
         return LGW_HAL_ERROR;
     }
 
+    /* Milesight board detection — must happen BEFORE GPIO clear (which would destroy pin levels) */
+    if (CONTEXT_BOARD.milesight_mode) {
+        ms_board_info_t ms_info;
+        err = ms_detect_board(&ms_info);
+        if (err != 0) {
+            printf("WARNING: Milesight board detection failed, continuing with defaults\n");
+        } else if (ms_info.pa_type == MS_BOARD_OLDPA) {
+            /* oldpa (hwver=0200): force full_duplex off to avoid AD5338R DAC init hang */
+            printf("INFO: Milesight oldpa detected — forcing full_duplex=false\n");
+            CONTEXT_BOARD.full_duplex = false;
+        }
+    }
+
     /* Set all GPIOs to 0 */
     err = sx1302_set_gpio(0x00);
     if (err != LGW_REG_SUCCESS) {
@@ -902,7 +917,11 @@ int lgw_start(void) {
             /* Setup the radio */
             switch (CONTEXT_RF_CHAIN[i].type) {
                 case LGW_RADIO_TYPE_SX1250:
-                    err = sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
+                    if (CONTEXT_BOARD.milesight_mode) {
+                        err = ms_sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
+                    } else {
+                        err = sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
+                    }
                     break;
                 case LGW_RADIO_TYPE_SX1255:
                 case LGW_RADIO_TYPE_SX1257:
@@ -1123,29 +1142,31 @@ int lgw_start(void) {
         }
 
         /* Configure ADC AD338R for full duplex (CN490 reference design) */
-        if (CONTEXT_BOARD.full_duplex == true) {
+        /* Skip for Milesight boards — they don't have the AD5338R DAC chip */
+        if ((CONTEXT_BOARD.full_duplex == true) && (CONTEXT_BOARD.milesight_mode == false)) {
             err = i2c_linuxdev_open(i2c_device, I2C_PORT_DAC_AD5338R, &ad_fd);
             if (err != LGW_I2C_SUCCESS) {
-                printf("ERROR: failed to open I2C for ad5338r\n");
-                return LGW_HAL_ERROR;
-            }
-
-            err = ad5338r_configure(ad_fd, I2C_PORT_DAC_AD5338R);
-            if (err != LGW_I2C_SUCCESS) {
-                printf("ERROR: failed to configure ad5338r\n");
-                i2c_linuxdev_close(ad_fd);
+                printf("WARNING: failed to open I2C for ad5338r (no DAC on board, skipping)\n");
                 ad_fd = -1;
-                return LGW_HAL_ERROR;
+            } else {
+                err = ad5338r_configure(ad_fd, I2C_PORT_DAC_AD5338R);
+                if (err != LGW_I2C_SUCCESS) {
+                    printf("WARNING: failed to configure ad5338r (no DAC on board, skipping)\n");
+                    i2c_linuxdev_close(ad_fd);
+                    ad_fd = -1;
+                } else {
+                    /* Turn off the PA: set DAC output to 0V */
+                    uint8_t volt_val[AD5338R_CMD_SIZE] = { 0x39, (uint8_t)VOLTAGE2HEX_H(0), (uint8_t)VOLTAGE2HEX_L(0) };
+                    err = ad5338r_write(ad_fd, I2C_PORT_DAC_AD5338R, volt_val);
+                    if (err != LGW_I2C_SUCCESS) {
+                        printf("WARNING: AD5338R: failed to set DAC output to 0V (skipping)\n");
+                        i2c_linuxdev_close(ad_fd);
+                        ad_fd = -1;
+                    } else {
+                        printf("INFO: AD5338R: Set DAC output to 0x%02X 0x%02X\n", (uint8_t)VOLTAGE2HEX_H(0), (uint8_t)VOLTAGE2HEX_L(0));
+                    }
+                }
             }
-
-            /* Turn off the PA: set DAC output to 0V */
-            uint8_t volt_val[AD5338R_CMD_SIZE] = { 0x39, (uint8_t)VOLTAGE2HEX_H(0), (uint8_t)VOLTAGE2HEX_L(0) };
-            err = ad5338r_write(ad_fd, I2C_PORT_DAC_AD5338R, volt_val);
-            if (err != LGW_I2C_SUCCESS) {
-                printf("ERROR: AD5338R: failed to set DAC output to 0V\n");
-                return LGW_HAL_ERROR;
-            }
-            printf("INFO: AD5338R: Set DAC output to 0x%02X 0x%02X\n", (uint8_t)VOLTAGE2HEX_H(0), (uint8_t)VOLTAGE2HEX_L(0));
         }
     }
 
@@ -1236,7 +1257,7 @@ int lgw_stop(void) {
             }
         }
 
-        if (CONTEXT_BOARD.full_duplex == true) {
+        if (CONTEXT_BOARD.full_duplex == true && ad_fd >= 0) {
             DEBUG_MSG("INFO: Closing I2C for AD5338R\n");
             x = i2c_linuxdev_close(ad_fd);
             if (x != 0) {
@@ -1421,7 +1442,7 @@ int lgw_send(struct lgw_pkt_tx_s * pkt_data) {
     }
 
     /* Set PA gain with AD5338R when using full duplex CN490 ref design */
-    if (CONTEXT_BOARD.full_duplex == true) {
+    if (CONTEXT_BOARD.full_duplex == true && ad_fd >= 0) {
         uint8_t volt_val[AD5338R_CMD_SIZE] = {0x39, VOLTAGE2HEX_H(2.51), VOLTAGE2HEX_L(2.51)}; /* set to 2.51V */
         err = ad5338r_write(ad_fd, I2C_PORT_DAC_AD5338R, volt_val);
         if (err != LGW_I2C_SUCCESS) {
