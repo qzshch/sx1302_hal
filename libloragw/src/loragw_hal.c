@@ -917,11 +917,14 @@ int lgw_start(void) {
             /* Setup the radio */
             switch (CONTEXT_RF_CHAIN[i].type) {
                 case LGW_RADIO_TYPE_SX1250:
-                    if (CONTEXT_BOARD.milesight_mode) {
-                        err = ms_sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
-                    } else {
-                        err = sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
-                    }
+                    /* Use upstream sx1250_setup (already has STANDBY_RC retry from v2 patch).
+                     * ms_sx1250_setup has extra calibration steps that interfere with RX.
+                     * The key Milesight adaptations are:
+                     *   - Board detection (ms_detect_board) — done above
+                     *   - DAC skip — done below
+                     *   - TX ur_pa — done in sx1302_send()
+                     */
+                    err = sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
                     break;
                 case LGW_RADIO_TYPE_SX1255:
                 case LGW_RADIO_TYPE_SX1257:
