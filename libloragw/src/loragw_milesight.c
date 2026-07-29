@@ -74,41 +74,19 @@ int ms_detect_board(ms_board_info_t *info) {
     printf("INFO: === Milesight Board Detection ===\n");
 
     /*
-     * Step 1: Configure SX1302 GPIO pins for reading external levels.
-     * This matches the native HAL sequence at 0x413be0:
-     *   - Clear all GPIO direction/config registers
-     *   - Set GPIO_CFG to 0xC3 (register mode, all GPIO as register-controlled)
-     *   - Set GPIO_OE to 0x40 (minimal output enable)
+     * Read-only approach: after lgw_connect(), the SX1302 GPIO pins are in
+     * their default state. We read the GPIO input registers directly without
+     * modifying any GPIO configuration, to avoid disturbing the SPI MUX path
+     * to the SX1250 radios.
      *
-     * We use raw SPI addresses (0x112-0x123) to match the native HAL exactly.
+     * The native HAL writes to registers 0x112-0x123 before reading, but
+     * those raw SPI writes have been found to interfere with SX1250 SPI
+     * communication in the upstream HAL context.
      */
 
-    /* Clear GPIO direction registers */
-    err |= sx1302_raw_w(0x011A, 0x00);
-    err |= sx1302_raw_w(0x011B, 0x00);
-    err |= sx1302_raw_w(0x011C, 0x00);
-    err |= sx1302_raw_w(0x011D, 0x00);
-    err |= sx1302_raw_w(0x011E, 0x00);
-    err |= sx1302_raw_w(0x011F, 0x00);
-    err |= sx1302_raw_w(0x0120, 0x00);
-    err |= sx1302_raw_w(0x0121, 0x00);
-    err |= sx1302_raw_w(SX1302_GPIO_DIR_H, 0x00);  /* 0x0113 */
-    err |= sx1302_raw_w(SX1302_GPIO_OE, 0x40);      /* 0x0119 */
-    err |= sx1302_raw_w(0x0122, 0x00);
-    err |= sx1302_raw_w(0x0123, 0x00);
-    err |= sx1302_raw_w(SX1302_GPIO_DIR_L, 0x00);   /* 0x0112 */
-    err |= sx1302_raw_w(SX1302_GPIO_CFG, 0xC3);      /* 0x0118 — note: native uses 0xC3 */
-
-    if (err != 0) {
-        printf("WARNING: GPIO config SPI write failed (err=%d)\n", err);
-    }
-
-    /* Small delay for GPIO levels to stabilize */
-    wait_ms(10);
-
     /*
-     * Step 2: Read GPIO input register (low byte) — double-read for debounce.
-     * Native HAL: sx1302_reg_r(0x116, &val) × 2 with nanosleep(100ms) between.
+     * Step 1: Read GPIO input register (low byte) — double-read for debounce.
+     * Raw SPI address 0x0116 = GPIO input low byte.
      */
     err = sx1302_raw_r(SX1302_GPIO_IN_L, &gpio_l_1);
     if (err != 0) {
@@ -146,29 +124,20 @@ int ms_detect_board(ms_board_info_t *info) {
 
     /*
      * Step 4: Read duplex mode from GPIO_IN_H (only meaningful for newpa).
-     * Native HAL: configures GPIO_DIR_H=0x0F, GPIO_OE=0x30, then reads 0x117.
+     * Read-only: just read the register without modifying GPIO configuration.
      */
-    err = sx1302_raw_w(SX1302_GPIO_DIR_H, 0x0F);  /* bits[11:8] as output */
-    err |= sx1302_raw_w(SX1302_GPIO_OE, 0x30);
-    wait_ms(100);
-
-    err |= sx1302_raw_r(SX1302_GPIO_IN_H, &gpio_h);
+    err = sx1302_raw_r(SX1302_GPIO_IN_H, &gpio_h);
     if (err != 0) {
         printf("WARNING: Failed to read GPIO_IN_H for duplex mode\n");
         gpio_h = 0;
     }
 
     /*
+     * Extract duplex mode from GPIO input high byte.
      * Native HAL: duplex_type = (gpio_117 >> 4) & 0x3
-     * GPIO_IN_H at raw addr 0x117 is a 4-bit register (bits[11:8]).
-     * The native HAL reads the full byte from SPI, where bits[5:4] contain
-     * the duplex info. Since our raw read returns just the 4-bit register
-     * value, we need to adjust the bit extraction.
-     *
-     * NOTE: If the register abstraction shifts the bits, this may need
-     * adjustment. Verify on hardware during Step 1 testing.
+     * The register value layout may differ from raw SPI address.
      */
-    info->duplex_mode = (gpio_h >> 1) & 0x3;  /* bits[2:1] of 4-bit register ≈ bits[5:4] of raw */
+    info->duplex_mode = (gpio_h >> 1) & 0x3;  /* bits[2:1] of 4-bit register */
     printf("INFO: GPIO_IN_H=0x%02X, duplex_mode=%d\n", gpio_h, info->duplex_mode);
 
     /* Store results */
