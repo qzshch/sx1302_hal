@@ -134,7 +134,7 @@ log "Verified: ${COLD_START_COUNT} 'cold-start' strings in binary"
 log "Step 5/7: Uploading to OSS..."
 
 python3 -c "
-import oss2
+import os, oss2
 auth = oss2.Auth(os.environ['OSS_ACCESS_KEY_ID'], os.environ['OSS_ACCESS_KEY_SECRET'])
 bucket = oss2.Bucket(auth, 'https://${OSS_ENDPOINT}', '${OSS_BUCKET}')
 result = bucket.put_object_from_file('${OSS_KEY}', '${BIN_PATH}')

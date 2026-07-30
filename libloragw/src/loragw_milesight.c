@@ -25,8 +25,8 @@
 #define SX1302_GPIO_DIR_H       0x0113  /* GPIO direction high nibble */
 #define SX1302_GPIO_CFG         0x0118  /* GPIO config (register mode) */
 #define SX1302_GPIO_OE          0x0119  /* GPIO output enable */
-#define SX1302_GPIO_IN_L        0x0116  /* GPIO input low byte (read-only) */
-#define SX1302_GPIO_IN_H        0x0117  /* GPIO input high nibble (read-only) */
+#define SX1302_GPIO_IN_H        0x0116  /* GPIO input high nibble (GPIO 15-12, read-only) */
+#define SX1302_GPIO_IN_L        0x0117  /* GPIO input low byte (GPIO 7-0, read-only) */
 
 /* SX1250 opcodes not in sx1250_defs.h */
 /* SX1250_SET_DIO_AS_RF_SWITCH removed — using WRITE_REGISTER instead */
@@ -68,92 +68,175 @@ const ms_board_info_t* ms_get_board_info(void) {
 
 int ms_detect_board(ms_board_info_t *info) {
     int err = 0;
-    uint8_t gpio_l_1, gpio_l_2, gpio_h;
+    uint8_t val1, val2;
     int pa_bit_1, pa_bit_2;
+    bool pa_detected = false;
 
-    printf("INFO: === Milesight Board Detection ===\n");
+    printf("INFO: === Milesight Board Detection (native HAL sequence) ===\n");
 
     /*
-     * Read-only approach: after lgw_connect(), the SX1302 GPIO pins are in
-     * their default state. We read the GPIO input registers directly without
-     * modifying any GPIO configuration, to avoid disturbing the SPI MUX path
-     * to the SX1250 radios.
+     * Phase 1: 14 GPIO configuration writes — MUST match native HAL exactly.
+     * Native pkt_fw (0x413be0) writes these registers before any GPIO read.
+     * Without proper config, GPIO input pins float → always read 0x00.
      *
-     * The native HAL writes to registers 0x112-0x123 before reading, but
-     * those raw SPI writes have been found to interfere with SX1250 SPI
-     * communication in the upstream HAL context.
+     * Register map (raw SPI addresses):
+     *   0x011A-0x011D = GPIO_OUT_H/L  (output value clear)
+     *   0x011E-0x0121 = GPIO_PD_H/L   (pull-down disable)
+     *   0x0112        = GPIO_DIR_L     (direction low byte → input)
+     *   0x0113        = GPIO_DIR_H     (direction high nibble → input)
+     *   0x0119        = GPIO_OE        (output enable)
+     *   0x0122-0x0123 = GPIO_SEL       (pin selection clear)
+     *   0x0118        = GPIO_CFG       (register mode = 0xC3)
      */
 
-    /*
-     * Step 1: Read GPIO input register (low byte) — double-read for debounce.
-     * Raw SPI address 0x0116 = GPIO input low byte.
-     */
-    err = sx1302_raw_r(SX1302_GPIO_IN_L, &gpio_l_1);
+    /* GPIO_OUT_H[15:12] = 0 */
+    err |= sx1302_raw_w(0x011A, 0x00);
+    /* GPIO_OUT_H[11:8] = 0 */
+    err |= sx1302_raw_w(0x011B, 0x00);
+    /* GPIO_OUT_L[7:4] = 0 */
+    err |= sx1302_raw_w(0x011C, 0x00);
+    /* GPIO_OUT_L[3:0] = 0 */
+    err |= sx1302_raw_w(0x011D, 0x00);
+    /* GPIO_PD_H[15:12] = 0 (disable pull-down) */
+    err |= sx1302_raw_w(0x011E, 0x00);
+    /* GPIO_PD_H[11:8] = 0 */
+    err |= sx1302_raw_w(0x011F, 0x00);
+    /* GPIO_PD_L[7:4] = 0 */
+    err |= sx1302_raw_w(0x0120, 0x00);
+    /* GPIO_PD_L[3:0] = 0 */
+    err |= sx1302_raw_w(0x0121, 0x00);
+    /* GPIO_DIR_H[15:12] = 0 → set as input */
+    err |= sx1302_raw_w(0x0113, 0x00);
+    /* GPIO_OE = 0x40 */
+    err |= sx1302_raw_w(0x0119, 0x40);
+    /* GPIO_SEL_8_11 = 0 */
+    err |= sx1302_raw_w(0x0122, 0x00);
+    /* GPIO_SEL extension = 0 */
+    err |= sx1302_raw_w(0x0123, 0x00);
+    /* GPIO_DIR_L[7:0] = 0 → all input */
+    err |= sx1302_raw_w(0x0112, 0x00);
+    /* GPIO_CFG = 0xC3 (register mode) */
+    err |= sx1302_raw_w(0x0118, 0xC3);
+
     if (err != 0) {
-        printf("ERROR: Failed to read GPIO_IN_L (1st read)\n");
+        printf("WARNING: GPIO config writes had errors (err=%d) — continuing\n", err);
+    }
+
+    wait_ms(10);  /* Let pin levels stabilize */
+
+    /*
+     * Phase 2: Two-stage PA detection (native HAL logic).
+     *
+     * Stage 1: Read GPIO_IN_H (0x0116) bit 0 — double-read debounce.
+     *   If both reads have bit0=1 → NEWPA (fast path).
+     *
+     * Stage 2 (fallback): Read GPIO_IN_L (0x0117) bit 6 — double-read debounce.
+     *   If both reads have bit6=1 → NEWPA.
+     *   Otherwise → OLDPA.
+     */
+
+    /* Stage 1: Quick PA detect from GPIO_IN_H (0x0116) bit 0 */
+    err = sx1302_raw_r(SX1302_GPIO_IN_H, &val1);
+    if (err != 0) {
+        printf("ERROR: Failed to read GPIO_IN_H (0x0116) stage 1\n");
         info->detected = false;
         return -1;
     }
-
     wait_ms(100);
-
-    err = sx1302_raw_r(SX1302_GPIO_IN_L, &gpio_l_2);
+    err = sx1302_raw_r(SX1302_GPIO_IN_H, &val2);
     if (err != 0) {
-        printf("ERROR: Failed to read GPIO_IN_L (2nd read)\n");
+        printf("ERROR: Failed to read GPIO_IN_H (0x0116) stage 1 (2nd)\n");
         info->detected = false;
         return -1;
     }
 
-    printf("INFO: GPIO_IN_L: read1=0x%02X read2=0x%02X\n", gpio_l_1, gpio_l_2);
+    printf("INFO: PA stage1: GPIO_IN_H(0x0116) read1=0x%02X read2=0x%02X\n", val1, val2);
 
-    /*
-     * Step 3: Determine PA type from GPIO_IN_L bit 0.
-     * Native HAL: pa_bit = val1 & 1; if (pa_bit & pa_bit2) → newpa; else → oldpa
-     * Both reads must agree (debounce).
-     */
-    pa_bit_1 = gpio_l_1 & 1;
-    pa_bit_2 = gpio_l_2 & 1;
+    pa_bit_1 = val1 & 0x1;  /* bit 0 */
+    pa_bit_2 = val2 & 0x1;  /* bit 0 */
 
     if (pa_bit_1 && pa_bit_2) {
         info->pa_type = MS_BOARD_NEWPA;
-        printf("INFO: Milesight NEWPA detected (external PA circuit)\n");
+        pa_detected = true;
+        printf("INFO: NEWPA detected via GPIO_IN_H bit0\n");
+    }
+
+    /* Stage 2 (fallback): GPIO_IN_L (0x0117) bit 6 */
+    if (!pa_detected) {
+        err = sx1302_raw_r(SX1302_GPIO_IN_L, &val1);
+        if (err != 0) {
+            printf("ERROR: Failed to read GPIO_IN_L (0x0117) stage 2\n");
+            info->detected = false;
+            return -1;
+        }
+        wait_ms(100);
+        err = sx1302_raw_r(SX1302_GPIO_IN_L, &val2);
+        if (err != 0) {
+            printf("ERROR: Failed to read GPIO_IN_L (0x0117) stage 2 (2nd)\n");
+            info->detected = false;
+            return -1;
+        }
+
+        printf("INFO: PA stage2: GPIO_IN_L(0x0117) read1=0x%02X read2=0x%02X\n", val1, val2);
+
+        pa_bit_1 = (val1 >> 6) & 0x1;  /* bit 6 */
+        pa_bit_2 = (val2 >> 6) & 0x1;  /* bit 6 */
+
+        if (pa_bit_1 && pa_bit_2) {
+            info->pa_type = MS_BOARD_NEWPA;
+            pa_detected = true;
+            printf("INFO: NEWPA detected via GPIO_IN_L bit6\n");
+        } else {
+            info->pa_type = MS_BOARD_OLDPA;
+            printf("INFO: OLDPA detected (both stages negative)\n");
+        }
+    }
+
+    /*
+     * Phase 3: Duplex mode detection (only for newpa).
+     * Native HAL reconfigures GPIO before reading duplex:
+     *   GPIO_DIR_H (0x0113) = 0x0F → GPIO 12-15 as output
+     *   GPIO_OE (0x0119) = 0x30    → output enable bits
+     * Then reads GPIO_IN_L (0x0117) and extracts bits[5:4].
+     *
+     * Native instruction: ubfx val, val, #4, #2  →  (val >> 4) & 0x3
+     */
+    if (info->pa_type == MS_BOARD_NEWPA) {
+        /* Reconfigure GPIO for duplex reading */
+        sx1302_raw_w(0x0113, 0x0F);   /* GPIO_DIR_H = 0x0F */
+        sx1302_raw_w(0x0119, 0x30);   /* GPIO_OE = 0x30 */
+        wait_ms(100);
+
+        err = sx1302_raw_r(SX1302_GPIO_IN_L, &val1);  /* Read 0x0117 */
+        if (err != 0) {
+            printf("WARNING: Failed to read duplex mode\n");
+            info->duplex_mode = 0;
+        } else {
+            info->duplex_mode = (val1 >> 4) & 0x3;  /* bits[5:4] */
+            printf("INFO: Duplex mode: GPIO_IN_L(0x0117)=0x%02X → duplex=%d\n",
+                   val1, info->duplex_mode);
+        }
     } else {
-        info->pa_type = MS_BOARD_OLDPA;
-        printf("INFO: Milesight OLDPA detected (internal PA circuit) — full_duplex will be forced off\n");
+        info->duplex_mode = 0;  /* OLDPA is always half-duplex */
+        printf("INFO: OLDPA → duplex_mode=0 (half-duplex)\n");
     }
 
-    /*
-     * Step 4: Read duplex mode from GPIO_IN_H (only meaningful for newpa).
-     * Read-only: just read the register without modifying GPIO configuration.
-     */
-    err = sx1302_raw_r(SX1302_GPIO_IN_H, &gpio_h);
-    if (err != 0) {
-        printf("WARNING: Failed to read GPIO_IN_H for duplex mode\n");
-        gpio_h = 0;
-    }
+    /* Store raw values for diagnostics */
+    sx1302_raw_r(SX1302_GPIO_IN_H, &info->gpio_in_h);  /* 0x0116 */
+    sx1302_raw_r(SX1302_GPIO_IN_L, &info->gpio_in_l);  /* 0x0117 */
 
-    /*
-     * Extract duplex mode from GPIO input high byte.
-     * Native HAL: duplex_type = (gpio_117 >> 4) & 0x3
-     * The register value layout may differ from raw SPI address.
-     */
-    info->duplex_mode = (gpio_h >> 1) & 0x3;  /* bits[2:1] of 4-bit register */
-    printf("INFO: GPIO_IN_H=0x%02X, duplex_mode=%d\n", gpio_h, info->duplex_mode);
-
-    /* Store results */
-    info->gpio_in_l = gpio_l_1;
-    info->gpio_in_h = gpio_h;
     info->detected = true;
 
     /* Copy to module-level state */
     memcpy(&board_info, info, sizeof(ms_board_info_t));
 
-    printf("INFO: === Board Detection Complete: pa=%s duplex=%d ===\n",
+    printf("INFO: === Board Detection Complete: pa=%s duplex=%d GPIO_H=0x%02X GPIO_L=0x%02X ===\n",
            (info->pa_type == MS_BOARD_NEWPA) ? "NEWPA" : "OLDPA",
-           info->duplex_mode);
+           info->duplex_mode, info->gpio_in_h, info->gpio_in_l);
 
     return 0;
 }
+
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 

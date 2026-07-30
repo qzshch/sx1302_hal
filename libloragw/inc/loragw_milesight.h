@@ -27,7 +27,7 @@ typedef enum {
 typedef struct {
     bool            detected;
     ms_board_pa_t   pa_type;
-    int             duplex_mode;     /* from GPIO 0x117 bits[5:4]: 0=half, 1=full */
+    int             duplex_mode;     /* from GPIO_IN_L(0x0117) bits[5:4]: 0=half, 1=full */
     uint8_t         gpio_in_l;      /* raw GPIO input low byte */
     uint8_t         gpio_in_h;      /* raw GPIO input high nibble */
 } ms_board_info_t;
