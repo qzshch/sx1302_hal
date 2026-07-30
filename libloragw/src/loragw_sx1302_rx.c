@@ -179,12 +179,12 @@ int rx_buffer_fetch(rx_buffer_t * self) {
                 DEBUG_PRINTF("INFO: syncword found at idx %d\n", idx);
                 break;
             } else {
-                printf("INFO: syncword not found at idx %d\n", idx);
+                DEBUG_PRINTF("INFO: syncword not found at idx %d\n", idx);
                 idx += 1;
             }
         }
         if (idx > self->buffer_size - 2) {
-            printf("WARNING: no syncword found, discard rx_buffer\n");
+            DEBUG_PRINTF("WARNING: no syncword found, discard rx_buffer\n");
             return rx_buffer_del(self);
         }
         if (idx != 0) {
@@ -197,7 +197,7 @@ int rx_buffer_fetch(rx_buffer_t * self) {
         idx = 0;
         while (idx < self->buffer_size) {
             if ((self->buffer[idx] != SX1302_PKT_SYNCWORD_BYTE_0) || (self->buffer[idx + 1] != SX1302_PKT_SYNCWORD_BYTE_1)) {
-                printf("WARNING: syncword not found at idx %d, discard the rx_buffer\n", idx);
+                DEBUG_PRINTF("WARNING: syncword not found at idx %d, discard the rx_buffer\n", idx);
                 return rx_buffer_del(self);
             }
             /* One packet found in the buffer */
