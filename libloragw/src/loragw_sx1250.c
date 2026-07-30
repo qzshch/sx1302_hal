@@ -169,6 +169,17 @@ int sx1250_setup(uint8_t rf_chain, uint32_t freq_hz, bool single_input_mode) {
     err |= sx1250_reg_w(CALIBRATE, buff, 1, rf_chain);
     wait_ms(10);
 
+    /*
+     * Milesight adaptation: send STANDBY_RC again after calibration.
+     * Native Milesight HAL does: STANDBY_RC → CALIBRATE → STANDBY_RC → STANDBY_XOSC
+     * The extra STANDBY_RC ensures calibration results are latched before XOSC starts.
+     * Without this, cold-start after container restart fails on hwver=0130/0200.
+     */
+    buff[0] = (uint8_t)STDBY_RC;
+    err |= sx1250_reg_w(SET_STANDBY, buff, 1, rf_chain);
+    wait_ms(20);
+    printf("INFO: SX1250_%u extra STANDBY_RC after calibration (Milesight)\n", rf_chain);
+
     /* Set Radio in Standby with XOSC ON — with retry */
     {
         int retry;
