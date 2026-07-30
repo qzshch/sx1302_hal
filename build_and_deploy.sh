@@ -64,21 +64,21 @@ log "HAL .a MD5: ${HAL_MD5}"
 log "Step 2/7: Syncing .a to all locations..."
 
 # Host locations
-cp "${HAL_DIR}/libloragw/libloragw.a" "/usr/local/aarch64-linux-musl/lib/libloragw-sx1302.a"
+cp "${HAL_DIR}/libloragw/libloragw.a" "/usr/local/aarch64-linux-musl-target/lib/libloragw-sx1302.a"
 cp -r "${HAL_DIR}/libloragw/inc/"* "/usr/local/aarch64-linux-musl/include/libloragw-sx1302/" 2>/dev/null || true
 
-HOST_MD5=$(md5sum /usr/local/aarch64-linux-musl/lib/libloragw-sx1302.a | cut -d' ' -f1)
+HOST_MD5=$(md5sum /usr/local/aarch64-linux-musl-target/lib/libloragw-sx1302.a | cut -d' ' -f1)
 [ "${HAL_MD5}" = "${HOST_MD5}" ] || fail "Host .a MD5 mismatch! HAL=${HAL_MD5} Host=${HOST_MD5}"
 
 # Docker image (for cross builds)
 docker rm -f hal-sync-tmp 2>/dev/null || true
 docker run -d --name hal-sync-tmp cross-milesight-patched:latest sleep 60 >/dev/null
-docker cp "${HAL_DIR}/libloragw/libloragw.a" hal-sync-tmp:/usr/local/aarch64-linux-musl/lib/libloragw-sx1302.a
+docker cp "${HAL_DIR}/libloragw/libloragw.a" hal-sync-tmp:/usr/local/aarch64-linux-musl-target/lib/libloragw-sx1302.a
 docker cp "${HAL_DIR}/libloragw/inc/." hal-sync-tmp:/usr/local/aarch64-linux-musl/include/libloragw-sx1302/
 docker commit hal-sync-tmp cross-milesight-patched:latest >/dev/null
 docker rm -f hal-sync-tmp >/dev/null
 
-DOCKER_MD5=$(docker run --rm cross-milesight-patched:latest md5sum /usr/local/aarch64-linux-musl/lib/libloragw-sx1302.a | cut -d' ' -f1)
+DOCKER_MD5=$(docker run --rm cross-milesight-patched:latest md5sum /usr/local/aarch64-linux-musl-target/lib/libloragw-sx1302.a | cut -d' ' -f1)
 [ "${HAL_MD5}" = "${DOCKER_MD5}" ] || fail "Docker .a MD5 mismatch! HAL=${HAL_MD5} Docker=${DOCKER_MD5}"
 
 log "All .a files synced (MD5: ${HAL_MD5})"
