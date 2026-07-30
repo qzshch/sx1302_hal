@@ -913,15 +913,16 @@ int lgw_start(void) {
     for (i = 0; i < LGW_RF_CHAIN_NB; i++) {
         if (CONTEXT_RF_CHAIN[i].enable == true) {
             /* Reset the radio */
-            if (CONTEXT_BOARD.milesight_mode) {
-                printf("INFO: Skipping radio %d reset (milesight_mode, using inherited state)\n", i);
-                err = LGW_REG_SUCCESS;
-            } else {
-                err = sx1302_radio_reset(i, CONTEXT_RF_CHAIN[i].type);
-                if (err != LGW_REG_SUCCESS) {
-                    printf("ERROR: failed to reset radio %d\n", i);
-                    return LGW_HAL_ERROR;
-                }
+            /*
+             * Radio reset is REQUIRED for cold-start: sx1302_radio_reset()
+             * toggles the SX1250 NRESET pin via SX1302 GPIO, bringing the
+             * radio from SLEEP to a known state. Without this, ms_sx1250_setup()
+             * cannot communicate with the SX1250 (STANDBY_RC fails).
+             */
+            err = sx1302_radio_reset(i, CONTEXT_RF_CHAIN[i].type);
+            if (err != LGW_REG_SUCCESS) {
+                printf("ERROR: failed to reset radio %d\n", i);
+                return LGW_HAL_ERROR;
             }
 
             /* Setup the radio */
@@ -929,14 +930,14 @@ int lgw_start(void) {
                 case LGW_RADIO_TYPE_SX1250:
                     if (CONTEXT_BOARD.milesight_mode) {
                         /*
-                         * Skip SX1250 re-init in Milesight mode.
-                         * The SX1250 was already fully initialized by native pkt_fw
-                         * (hot-switch). Re-running sx1250_setup() would overwrite the
-                         * inherited PA config, frequency, and RX state.
-                         * TX PA control is handled per-packet via ms_tx_pa_control().
+                         * Milesight cold-start: full 8-phase SX1250 initialization.
+                         * Replaces upstream sx1250_setup() with Milesight-native sequence:
+                         * STANDBY_RC -> SetRegulatorMode -> STANDBY_XOSC -> Calibrate ->
+                         * CalibrateImage -> SetDIOAsRfSwitch -> SetTxParams -> RX continuous.
+                         * Works both cold-start (no pkt_fw) and hot-switch (re-init is safe).
                          */
-                        printf("INFO: Skipping SX1250_%d setup (milesight_mode, using inherited state)\n", i);
-                        err = LGW_REG_SUCCESS;
+                        printf("INFO: Milesight cold-start SX1250_%d setup\n", i);
+                        err = ms_sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
                     } else {
                         err = sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
                     }

@@ -29,7 +29,7 @@
 #define SX1302_GPIO_IN_H        0x0117  /* GPIO input high nibble (read-only) */
 
 /* SX1250 opcodes not in sx1250_defs.h */
-#define SX1250_SET_DIO_AS_RF_SWITCH  0x9D  /* SetRFSwitchMode */
+/* SX1250_SET_DIO_AS_RF_SWITCH removed — using WRITE_REGISTER instead */
 
 /* ur_pa default value — extracted from native HAL TX gain LUT */
 #define MS_DEFAULT_UR_PA_BYTE   0x1E
@@ -242,25 +242,30 @@ int ms_sx1250_setup(uint8_t rf_chain, uint32_t freq_hz, bool single_input_mode) 
     err |= sx1250_calibrate(rf_chain, freq_hz);
 
     /*
-     * Phase 6: SetDIOAsRfSwitch.
-     * Native HAL: helper_A(0x0D, {0x08, 0xF0, 0x08, 0x00}, 5, rf_chain)
-     * 0x0D = WRITE_REGISTER, but this is likely SetRFSwitchMode (0x9D) with 5 params.
-     * Standard SX1250 SetRFSwitchMode: enable/disable DIO pins for RF switch control.
+     * Phase 6: SetDIOAsRfSwitch — write SX1250 registers via WRITE_REGISTER.
+     * Native HAL: helper_A(0x0D, {...}, ..., rf_chain)
+     * 0x0D = WRITE_REGISTER, parameters are [addr_hi, addr_lo, value]
      */
-    buff[0] = 0x08;  /* DIO5 as RfSwCtrl0 */
-    buff[1] = 0xF0;  /* DIO6-7 disabled, PA config */
-    buff[2] = 0x08;  /* additional RF switch config */
-    buff[3] = 0x00;
-    buff[4] = 0x00;
-    err |= sx1250_reg_w((sx1250_op_code_t)SX1250_SET_DIO_AS_RF_SWITCH, buff, 5, rf_chain);
+    /* DIO5 enable for RF switch control */
+    buff[0] = 0x05; buff[1] = 0x80; buff[2] = 0x08;
+    err |= sx1250_reg_w(WRITE_REGISTER, buff, 3, rf_chain);
+    /* DIO6 enable for RF switch control */
+    buff[0] = 0x05; buff[1] = 0x81; buff[2] = 0x08;
+    err |= sx1250_reg_w(WRITE_REGISTER, buff, 3, rf_chain);
+    /* RF switch control: DIO5=RxEn, DIO6=TxEn */
+    buff[0] = 0x05; buff[1] = 0x82; buff[2] = 0xF0;
+    err |= sx1250_reg_w(WRITE_REGISTER, buff, 3, rf_chain);
+    /* RfSwCtrl for radio 0 */
+    buff[0] = 0x00; buff[1] = 0x59; buff[2] = 0x00;
+    err |= sx1250_reg_w(WRITE_REGISTER, buff, 3, rf_chain);
 
     /*
-     * Phase 7: SetTxParams — auto power.
-     * Native HAL: helper_A(0x0D, {0xFF, 0xFF, 0x00}, 2, rf_chain)
-     * Using standard SET_TX_PARAMS (0x8E) with power=0xFF (auto) and ramp time.
+     * Phase 7: SetTxParams — initial TX power.
+     * Will be overridden per-packet by ms_tx_pa_control() via AGC.
+     * Using 14 dBm as safe initial value (pa_gain=0, internal PA).
      */
-    buff[0] = 0xFF;  /* power (auto — will be overridden per-packet) */
-    buff[1] = 0x04;  /* ramp time = SET_RAMP_200U */
+    buff[0] = 14;    /* power in dBm */
+    buff[1] = (uint8_t)SET_RAMP_200U;  /* ramp time */
     err |= sx1250_reg_w(SET_TX_PARAMS, buff, 2, rf_chain);
 
     /*
