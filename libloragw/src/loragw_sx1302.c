@@ -1390,11 +1390,16 @@ int sx1302_agc_start(uint8_t version, lgw_radio_type_t radio_type, uint8_t ana_g
         return LGW_REG_ERROR;
     }
 
-    /* Check FDD mode setting */
-    sx1302_agc_mailbox_read(2, &val);
-    if (val != fdd_mode) {
-        printf("ERROR: FDD mode of Radio A has not been set properly\n");
-        return LGW_REG_ERROR;
+    /* Check FDD mode setting.
+       Only meaningful for sx125x: mailbox 2 is not written for SX1250,
+       so reading it back would compare against a stale value. The native
+       Milesight HAL never reads mailbox 2 (see sx1302_agc_start @0x415910). */
+    if (radio_type != LGW_RADIO_TYPE_SX1250) {
+        sx1302_agc_mailbox_read(2, &val);
+        if (val != fdd_mode) {
+            printf("ERROR: FDD mode of Radio A has not been set properly\n");
+            return LGW_REG_ERROR;
+        }
     }
 
     DEBUG_MSG("AGC: Radio A config done\n");
@@ -1412,7 +1417,10 @@ int sx1302_agc_start(uint8_t version, lgw_radio_type_t radio_type, uint8_t ana_g
     sx1302_agc_mailbox_write(3, AGC_RADIO_B_INIT_DONE);
 
     /* Wait for AGC to acknoledge it has received gain settings for Radio B */
-    { int rb = sx1302_agc_wait_status(0x03); if (rb != LGW_REG_SUCCESS) { printf("WARNING: AGC Radio B timeout - partial init\n"); return LGW_REG_SUCCESS; } }
+    if (sx1302_agc_wait_status(0x03) != LGW_REG_SUCCESS) {
+        printf("ERROR: AGC did not acknowledge Radio B gain settings\n");
+        return LGW_REG_ERROR;
+    }
 
     /* Check ana_gain setting */
     sx1302_agc_mailbox_read(0, &val);
@@ -1428,11 +1436,16 @@ int sx1302_agc_start(uint8_t version, lgw_radio_type_t radio_type, uint8_t ana_g
         return LGW_REG_ERROR;
     }
 
-    /* Check FDD mode setting */
-    sx1302_agc_mailbox_read(2, &val);
-    if (val != fdd_mode) {
-        printf("ERROR: FDD mode of Radio B has not been set properly\n");
-        return LGW_REG_ERROR;
+    /* Check FDD mode setting.
+       Only meaningful for sx125x: mailbox 2 is not written for SX1250,
+       so reading it back would compare against a stale value. The native
+       Milesight HAL never reads mailbox 2 (see sx1302_agc_start @0x415910). */
+    if (radio_type != LGW_RADIO_TYPE_SX1250) {
+        sx1302_agc_mailbox_read(2, &val);
+        if (val != fdd_mode) {
+            printf("ERROR: FDD mode of Radio B has not been set properly\n");
+            return LGW_REG_ERROR;
+        }
     }
 
     DEBUG_MSG("AGC: Radio B config done\n");
