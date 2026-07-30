@@ -13,6 +13,7 @@
 
 #include "loragw_milesight.h"
 #include "loragw_com.h"
+#include "loragw_reg.h"
 #include "loragw_aux.h"
 #include "loragw_sx1250.h"
 #include "sx1250_defs.h"
@@ -68,55 +69,57 @@ const ms_board_info_t* ms_get_board_info(void) {
 
 int ms_detect_board(ms_board_info_t *info) {
     int err = 0;
+    int32_t val;
     uint8_t val1, val2;
     int pa_bit_1, pa_bit_2;
     bool pa_detected = false;
 
-    printf("INFO: === Milesight Board Detection (native HAL sequence) ===\n");
+    printf("INFO: === Milesight Board Detection (Semtech register API) ===\n");
 
     /*
-     * Phase 1: 14 GPIO configuration writes — MUST match native HAL exactly.
-     * Native pkt_fw (0x413be0) writes these registers before any GPIO read.
-     * Without proper config, GPIO input pins float → always read 0x00.
+     * Phase 1: GPIO configuration — using Semtech register abstraction layer.
      *
-     * Register map (raw SPI addresses):
-     *   0x011A-0x011D = GPIO_OUT_H/L  (output value clear)
-     *   0x011E-0x0121 = GPIO_PD_H/L   (pull-down disable)
-     *   0x0112        = GPIO_DIR_L     (direction low byte → input)
-     *   0x0113        = GPIO_DIR_H     (direction high nibble → input)
-     *   0x0119        = GPIO_OE        (output enable)
-     *   0x0122-0x0123 = GPIO_SEL       (pin selection clear)
-     *   0x0118        = GPIO_CFG       (register mode = 0xC3)
+     * CRITICAL: The Semtech HAL uses 16-bit SPI addresses (base 0x5640 for GPIO),
+     * NOT the 8-bit offsets (0x0112-0x0123) used by the native Milesight HAL.
+     * lgw_reg_w/r() handles the correct address translation automatically.
+     *
+     * Register IDs (from loragw_reg.h):
+     *   274 = GPIO_DIR_H (4-bit, R/W)  — SPI 0x5640
+     *   275 = GPIO_DIR_L (8-bit, R/W)  — SPI 0x5641
+     *   276 = GPIO_OUT_H (4-bit, R/W)  — SPI 0x5642
+     *   277 = GPIO_OUT_L (8-bit, R/W)  — SPI 0x5643
+     *   278 = GPIO_IN_H  (4-bit, R/O)  — SPI 0x5644
+     *   279 = GPIO_IN_L  (8-bit, R/O)  — SPI 0x5645
+     *   280 = GPIO_PD_H  (4-bit, R/W)  — SPI 0x5646
+     *   281 = GPIO_PD_L  (8-bit, R/W)  — SPI 0x5647
+     *   282-289 = GPIO_SEL_0..7 (4/8-bit, R/W) — SPI 0x5648-0x564F
+     *   290 = GPIO_SEL_8_11_HI (4-bit, R/W) — SPI 0x5650
+     *   291 = GPIO_SEL_8_11_LO (8-bit, R/W) — SPI 0x5651
      */
 
-    /* GPIO_OUT_H[15:12] = 0 */
-    err |= sx1302_raw_w(0x011A, 0x00);
-    /* GPIO_OUT_H[11:8] = 0 */
-    err |= sx1302_raw_w(0x011B, 0x00);
-    /* GPIO_OUT_L[7:4] = 0 */
-    err |= sx1302_raw_w(0x011C, 0x00);
-    /* GPIO_OUT_L[3:0] = 0 */
-    err |= sx1302_raw_w(0x011D, 0x00);
-    /* GPIO_PD_H[15:12] = 0 (disable pull-down) */
-    err |= sx1302_raw_w(0x011E, 0x00);
-    /* GPIO_PD_H[11:8] = 0 */
-    err |= sx1302_raw_w(0x011F, 0x00);
-    /* GPIO_PD_L[7:4] = 0 */
-    err |= sx1302_raw_w(0x0120, 0x00);
-    /* GPIO_PD_L[3:0] = 0 */
-    err |= sx1302_raw_w(0x0121, 0x00);
-    /* GPIO_DIR_H[15:12] = 0 → set as input */
-    err |= sx1302_raw_w(0x0113, 0x00);
-    /* GPIO_OE = 0x40 */
-    err |= sx1302_raw_w(0x0119, 0x40);
-    /* GPIO_SEL_8_11 = 0 */
-    err |= sx1302_raw_w(0x0122, 0x00);
-    /* GPIO_SEL extension = 0 */
-    err |= sx1302_raw_w(0x0123, 0x00);
-    /* GPIO_DIR_L[7:0] = 0 → all input */
-    err |= sx1302_raw_w(0x0112, 0x00);
-    /* GPIO_CFG = 0xC3 (register mode) */
-    err |= sx1302_raw_w(0x0118, 0xC3);
+    /* Clear GPIO output values */
+    err |= lgw_reg_w(SX1302_REG_GPIO_GPIO_OUT_H_OUT_VALUE, 0);
+    err |= lgw_reg_w(SX1302_REG_GPIO_GPIO_OUT_L_OUT_VALUE, 0);
+
+    /* Disable pull-down on all GPIOs */
+    err |= lgw_reg_w(SX1302_REG_GPIO_GPIO_PD_H_PD_VALUE, 0);
+    err |= lgw_reg_w(SX1302_REG_GPIO_GPIO_PD_L_PD_VALUE, 0);
+
+    /* Set all GPIOs as input */
+    err |= lgw_reg_w(SX1302_REG_GPIO_GPIO_DIR_H_DIRECTION, 0);
+    err |= lgw_reg_w(SX1302_REG_GPIO_GPIO_DIR_L_DIRECTION, 0);
+
+    /* Clear GPIO selection */
+    err |= lgw_reg_w(SX1302_REG_GPIO_GPIO_SEL_8_11_GPIO_11_9_SEL, 0);
+    err |= lgw_reg_w(SX1302_REG_GPIO_GPIO_SEL_8_11_GPIO_8_SEL, 0);
+
+    /* GPIO_CFG and GPIO_OE are not in Semtech register table.
+     * Use raw SPI with correct Semtech addresses:
+     *   GPIO_CFG = 0x564C (base 0x5640 + offset 12)
+     *   GPIO_OE  = 0x564D (base 0x5640 + offset 13)
+     */
+    err |= lgw_com_w(LGW_SPI_MUX_TARGET_SX1302, 0x564C, 0xC3);
+    err |= lgw_com_w(LGW_SPI_MUX_TARGET_SX1302, 0x564D, 0x40);
 
     if (err != 0) {
         printf("WARNING: GPIO config writes had errors (err=%d) — continuing\n", err);
@@ -125,35 +128,37 @@ int ms_detect_board(ms_board_info_t *info) {
     wait_ms(10);  /* Let pin levels stabilize */
 
     /*
-     * Phase 2: Two-stage PA detection (native HAL logic).
+     * Phase 2: Two-stage PA detection.
      *
-     * Stage 1: Read GPIO_IN_H (0x0116) bit 0 — double-read debounce.
-     *   If both reads have bit0=1 → NEWPA (fast path).
+     * Stage 1: Read GPIO_IN_H (reg 278, SPI 0x5644) bit 0.
+     *   Both reads bit0=1 → NEWPA (fast path).
      *
-     * Stage 2 (fallback): Read GPIO_IN_L (0x0117) bit 6 — double-read debounce.
-     *   If both reads have bit6=1 → NEWPA.
+     * Stage 2: Read GPIO_IN_L (reg 279, SPI 0x5645) bit 6.
+     *   Both reads bit6=1 → NEWPA.
      *   Otherwise → OLDPA.
      */
 
-    /* Stage 1: Quick PA detect from GPIO_IN_H (0x0116) bit 0 */
-    err = sx1302_raw_r(SX1302_GPIO_IN_H, &val1);
+    /* Stage 1: PA detect from GPIO_IN_H bit 0 */
+    err = lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_H_IN_VALUE, &val);
+    val1 = (uint8_t)val;
     if (err != 0) {
-        printf("ERROR: Failed to read GPIO_IN_H (0x0116) stage 1\n");
+        printf("ERROR: Failed to read GPIO_IN_H\n");
         info->detected = false;
         return -1;
     }
     wait_ms(100);
-    err = sx1302_raw_r(SX1302_GPIO_IN_H, &val2);
+    err = lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_H_IN_VALUE, &val);
+    val2 = (uint8_t)val;
     if (err != 0) {
-        printf("ERROR: Failed to read GPIO_IN_H (0x0116) stage 1 (2nd)\n");
+        printf("ERROR: Failed to read GPIO_IN_H (2nd)\n");
         info->detected = false;
         return -1;
     }
 
-    printf("INFO: PA stage1: GPIO_IN_H(0x0116) read1=0x%02X read2=0x%02X\n", val1, val2);
+    printf("INFO: PA stage1: GPIO_IN_H read1=0x%02X read2=0x%02X\n", val1, val2);
 
-    pa_bit_1 = val1 & 0x1;  /* bit 0 */
-    pa_bit_2 = val2 & 0x1;  /* bit 0 */
+    pa_bit_1 = val1 & 0x1;
+    pa_bit_2 = val2 & 0x1;
 
     if (pa_bit_1 && pa_bit_2) {
         info->pa_type = MS_BOARD_NEWPA;
@@ -161,26 +166,28 @@ int ms_detect_board(ms_board_info_t *info) {
         printf("INFO: NEWPA detected via GPIO_IN_H bit0\n");
     }
 
-    /* Stage 2 (fallback): GPIO_IN_L (0x0117) bit 6 */
+    /* Stage 2 (fallback): GPIO_IN_L bit 6 */
     if (!pa_detected) {
-        err = sx1302_raw_r(SX1302_GPIO_IN_L, &val1);
+        err = lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_L_IN_VALUE, &val);
+        val1 = (uint8_t)val;
         if (err != 0) {
-            printf("ERROR: Failed to read GPIO_IN_L (0x0117) stage 2\n");
+            printf("ERROR: Failed to read GPIO_IN_L\n");
             info->detected = false;
             return -1;
         }
         wait_ms(100);
-        err = sx1302_raw_r(SX1302_GPIO_IN_L, &val2);
+        err = lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_L_IN_VALUE, &val);
+        val2 = (uint8_t)val;
         if (err != 0) {
-            printf("ERROR: Failed to read GPIO_IN_L (0x0117) stage 2 (2nd)\n");
+            printf("ERROR: Failed to read GPIO_IN_L (2nd)\n");
             info->detected = false;
             return -1;
         }
 
-        printf("INFO: PA stage2: GPIO_IN_L(0x0117) read1=0x%02X read2=0x%02X\n", val1, val2);
+        printf("INFO: PA stage2: GPIO_IN_L read1=0x%02X read2=0x%02X\n", val1, val2);
 
-        pa_bit_1 = (val1 >> 6) & 0x1;  /* bit 6 */
-        pa_bit_2 = (val2 >> 6) & 0x1;  /* bit 6 */
+        pa_bit_1 = (val1 >> 6) & 0x1;
+        pa_bit_2 = (val2 >> 6) & 0x1;
 
         if (pa_bit_1 && pa_bit_2) {
             info->pa_type = MS_BOARD_NEWPA;
@@ -194,40 +201,36 @@ int ms_detect_board(ms_board_info_t *info) {
 
     /*
      * Phase 3: Duplex mode detection (only for newpa).
-     * Native HAL reconfigures GPIO before reading duplex:
-     *   GPIO_DIR_H (0x0113) = 0x0F → GPIO 12-15 as output
-     *   GPIO_OE (0x0119) = 0x30    → output enable bits
-     * Then reads GPIO_IN_L (0x0117) and extracts bits[5:4].
-     *
-     * Native instruction: ubfx val, val, #4, #2  →  (val >> 4) & 0x3
+     * Native HAL: reconfigures GPIO_DIR_H=0x0F + GPIO_OE=0x30,
+     * then reads GPIO_IN_L and extracts bits[5:4].
      */
     if (info->pa_type == MS_BOARD_NEWPA) {
-        /* Reconfigure GPIO for duplex reading */
-        sx1302_raw_w(0x0113, 0x0F);   /* GPIO_DIR_H = 0x0F */
-        sx1302_raw_w(0x0119, 0x30);   /* GPIO_OE = 0x30 */
+        lgw_reg_w(SX1302_REG_GPIO_GPIO_DIR_H_DIRECTION, 0x0F);
+        lgw_com_w(LGW_SPI_MUX_TARGET_SX1302, 0x564D, 0x30);
         wait_ms(100);
 
-        err = sx1302_raw_r(SX1302_GPIO_IN_L, &val1);  /* Read 0x0117 */
+        err = lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_L_IN_VALUE, &val);
+        val1 = (uint8_t)val;
         if (err != 0) {
             printf("WARNING: Failed to read duplex mode\n");
             info->duplex_mode = 0;
         } else {
-            info->duplex_mode = (val1 >> 4) & 0x3;  /* bits[5:4] */
-            printf("INFO: Duplex mode: GPIO_IN_L(0x0117)=0x%02X → duplex=%d\n",
+            info->duplex_mode = (val1 >> 4) & 0x3;
+            printf("INFO: Duplex mode: GPIO_IN_L=0x%02X → duplex=%d\n",
                    val1, info->duplex_mode);
         }
     } else {
-        info->duplex_mode = 0;  /* OLDPA is always half-duplex */
+        info->duplex_mode = 0;
         printf("INFO: OLDPA → duplex_mode=0 (half-duplex)\n");
     }
 
     /* Store raw values for diagnostics */
-    sx1302_raw_r(SX1302_GPIO_IN_H, &info->gpio_in_h);  /* 0x0116 */
-    sx1302_raw_r(SX1302_GPIO_IN_L, &info->gpio_in_l);  /* 0x0117 */
+    lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_H_IN_VALUE, &val);
+    info->gpio_in_h = (uint8_t)val;
+    lgw_reg_r(SX1302_REG_GPIO_GPIO_IN_L_IN_VALUE, &val);
+    info->gpio_in_l = (uint8_t)val;
 
     info->detected = true;
-
-    /* Copy to module-level state */
     memcpy(&board_info, info, sizeof(ms_board_info_t));
 
     printf("INFO: === Board Detection Complete: pa=%s duplex=%d GPIO_H=0x%02X GPIO_L=0x%02X ===\n",
