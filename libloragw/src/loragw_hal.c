@@ -1067,61 +1067,81 @@ int lgw_start(void) {
     }
 
     /* Load AGC firmware */
-    switch (CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type) {
-        case LGW_RADIO_TYPE_SX1250:
-            DEBUG_MSG("Loading AGC fw for sx1250\n");
-            err = sx1302_agc_load_firmware(agc_firmware_sx1250);
-            if (err != LGW_REG_SUCCESS) {
-                printf("ERROR: failed to load AGC firmware for sx1250\n");
+    if (CONTEXT_BOARD.milesight_mode) {
+        /*
+         * Skip AGC firmware reload in Milesight hot-switch mode.
+         * The pkt_fw has already loaded and started the AGC firmware.
+         * Reloading causes an infinite "syncword not found" loop because
+         * the SX1302 AGC MCU state from pkt_fw is incompatible with
+         * a fresh firmware load.
+         */
+        printf("INFO: Skipping AGC firmware load (milesight_mode, using inherited AGC state)\n");
+        fw_version_agc = FW_VERSION_AGC_SX1250;
+    } else {
+        switch (CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type) {
+            case LGW_RADIO_TYPE_SX1250:
+                DEBUG_MSG("Loading AGC fw for sx1250\n");
+                err = sx1302_agc_load_firmware(agc_firmware_sx1250);
+                if (err != LGW_REG_SUCCESS) {
+                    printf("ERROR: failed to load AGC firmware for sx1250\n");
+                    return LGW_HAL_ERROR;
+                }
+                fw_version_agc = FW_VERSION_AGC_SX1250;
+                break;
+            case LGW_RADIO_TYPE_SX1255:
+            case LGW_RADIO_TYPE_SX1257:
+                DEBUG_MSG("Loading AGC fw for sx125x\n");
+                err = sx1302_agc_load_firmware(agc_firmware_sx125x);
+                if (err != LGW_REG_SUCCESS) {
+                    printf("ERROR: failed to load AGC firmware for sx125x\n");
+                    return LGW_HAL_ERROR;
+                }
+                fw_version_agc = FW_VERSION_AGC_SX125X;
+                break;
+            default:
+                printf("ERROR: failed to load AGC firmware, radio type not supported (%d)\n", CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type);
                 return LGW_HAL_ERROR;
-            }
-            fw_version_agc = FW_VERSION_AGC_SX1250;
-            break;
-        case LGW_RADIO_TYPE_SX1255:
-        case LGW_RADIO_TYPE_SX1257:
-            DEBUG_MSG("Loading AGC fw for sx125x\n");
-            err = sx1302_agc_load_firmware(agc_firmware_sx125x);
-            if (err != LGW_REG_SUCCESS) {
-                printf("ERROR: failed to load AGC firmware for sx125x\n");
-                return LGW_HAL_ERROR;
-            }
-            fw_version_agc = FW_VERSION_AGC_SX125X;
-            break;
-        default:
-            printf("ERROR: failed to load AGC firmware, radio type not supported (%d)\n", CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type);
+        }
+    }
+    if (!CONTEXT_BOARD.milesight_mode) {
+        err = sx1302_agc_start(fw_version_agc, CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type, SX1302_AGC_RADIO_GAIN_AUTO, SX1302_AGC_RADIO_GAIN_AUTO, CONTEXT_BOARD.full_duplex, CONTEXT_SX1261.lbt_conf.enable);
+        if (err != LGW_REG_SUCCESS) {
+            printf("ERROR: failed to start AGC firmware\n");
             return LGW_HAL_ERROR;
-    }
-    err = sx1302_agc_start(fw_version_agc, CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type, SX1302_AGC_RADIO_GAIN_AUTO, SX1302_AGC_RADIO_GAIN_AUTO, CONTEXT_BOARD.full_duplex, CONTEXT_SX1261.lbt_conf.enable);
-    if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to start AGC firmware\n");
-        return LGW_HAL_ERROR;
-    }
+        }
 
-    /* Load ARB firmware */
-    DEBUG_MSG("Loading ARB fw\n");
-    err = sx1302_arb_load_firmware(arb_firmware);
-    if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to load ARB firmware\n");
-        return LGW_HAL_ERROR;
-    }
-    err = sx1302_arb_start(FW_VERSION_ARB, &CONTEXT_FINE_TIMESTAMP);
-    if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to start ARB firmware\n");
-        return LGW_HAL_ERROR;
-    }
+        /* Load ARB firmware */
+        DEBUG_MSG("Loading ARB fw\n");
+        err = sx1302_arb_load_firmware(arb_firmware);
+        if (err != LGW_REG_SUCCESS) {
+            printf("ERROR: failed to load ARB firmware\n");
+            return LGW_HAL_ERROR;
+        }
+        err = sx1302_arb_start(FW_VERSION_ARB, &CONTEXT_FINE_TIMESTAMP);
+        if (err != LGW_REG_SUCCESS) {
+            printf("ERROR: failed to start ARB firmware\n");
+            return LGW_HAL_ERROR;
+        }
 
-    /* static TX configuration */
-    err = sx1302_tx_configure(CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type);
-    if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to configure SX1302 TX path\n");
-        return LGW_HAL_ERROR;
+        /* static TX configuration */
+        err = sx1302_tx_configure(CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type);
+        if (err != LGW_REG_SUCCESS) {
+            printf("ERROR: failed to configure SX1302 TX path\n");
+            return LGW_HAL_ERROR;
+        }
+    } else {
+        printf("INFO: Skipping AGC/ARB/TX init (milesight_mode, using inherited state)\n");
     }
 
     /* enable GPS */
-    err = sx1302_gps_enable(true);
-    if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to enable GPS on sx1302\n");
-        return LGW_HAL_ERROR;
+    if (!CONTEXT_BOARD.milesight_mode) {
+        err = sx1302_gps_enable(true);
+        if (err != LGW_REG_SUCCESS) {
+            printf("ERROR: failed to enable GPS on sx1302\n");
+            return LGW_HAL_ERROR;
+        }
+    } else {
+        printf("INFO: Skipping GPS enable (milesight_mode, using inherited state)\n");
     }
 
     /* For debug logging */
