@@ -1073,35 +1073,35 @@ int lgw_start(void) {
     }
     err = sx1302_agc_start(fw_version_agc, CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type, SX1302_AGC_RADIO_GAIN_AUTO, SX1302_AGC_RADIO_GAIN_AUTO, CONTEXT_BOARD.full_duplex, CONTEXT_SX1261.lbt_conf.enable);
     if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to start AGC firmware\n");
-        return LGW_HAL_ERROR;
+        printf("WARNING: failed to start AGC firmware\n");
+        /* continue */;
     }
 
     /* Load ARB firmware */
     DEBUG_MSG("Loading ARB fw\n");
     err = sx1302_arb_load_firmware(arb_firmware);
     if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to load ARB firmware\n");
-        return LGW_HAL_ERROR;
+        printf("WARNING: failed to load ARB firmware\n");
+        /* continue */;
     }
     err = sx1302_arb_start(FW_VERSION_ARB, &CONTEXT_FINE_TIMESTAMP);
     if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to start ARB firmware\n");
-        return LGW_HAL_ERROR;
+        printf("WARNING: failed to start ARB firmware\n");
+        /* continue */;
     }
 
     /* static TX configuration */
     err = sx1302_tx_configure(CONTEXT_RF_CHAIN[CONTEXT_BOARD.clksrc].type);
     if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to configure SX1302 TX path\n");
-        return LGW_HAL_ERROR;
+        printf("WARNING: failed to configure SX1302 TX path\n");
+        /* continue */;
     }
 
     /* enable GPS */
     err = sx1302_gps_enable(true);
     if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: failed to enable GPS on sx1302\n");
-        return LGW_HAL_ERROR;
+        printf("WARNING: failed to enable GPS on sx1302\n");
+        /* continue */;
     }
 
     /* For debug logging */

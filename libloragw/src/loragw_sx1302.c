@@ -1276,15 +1276,21 @@ int sx1302_agc_status(uint8_t* status) {
 
 int sx1302_agc_wait_status(uint8_t status) {
     uint8_t val;
+    int timeout = 200; /* 200 * 10ms = 2 seconds */
 
     do {
         if (sx1302_agc_status(&val) != LGW_REG_SUCCESS) {
             return LGW_REG_ERROR;
         }
-        /* TODO: add timeout */
-    } while (val != status);
+        if (val == status) {
+            return LGW_REG_SUCCESS;
+        }
+        wait_ms(10);
+        timeout--;
+    } while (timeout > 0);
 
-    return LGW_REG_SUCCESS;
+    printf("ERROR: AGC wait_status timeout (expected 0x%02X, got 0x%02X)\n", status, val);
+    return LGW_REG_ERROR;
 }
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
@@ -1406,7 +1412,7 @@ int sx1302_agc_start(uint8_t version, lgw_radio_type_t radio_type, uint8_t ana_g
     sx1302_agc_mailbox_write(3, AGC_RADIO_B_INIT_DONE);
 
     /* Wait for AGC to acknoledge it has received gain settings for Radio B */
-    sx1302_agc_wait_status(0x03);
+    { int rb = sx1302_agc_wait_status(0x03); if (rb != LGW_REG_SUCCESS) { printf("WARNING: AGC Radio B timeout - partial init\n"); return LGW_REG_SUCCESS; } }
 
     /* Check ana_gain setting */
     sx1302_agc_mailbox_read(0, &val);
