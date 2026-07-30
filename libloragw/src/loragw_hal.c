@@ -898,33 +898,48 @@ int lgw_start(void) {
     sx1302_read_board_info();
 
     /* Calibrate radios */
-    err = sx1302_radio_calibrate(&CONTEXT_RF_CHAIN[0], CONTEXT_BOARD.clksrc, &CONTEXT_TX_GAIN_LUT[0]);
-    if (err != LGW_REG_SUCCESS) {
-        printf("ERROR: radio calibration failed\n");
-        return LGW_HAL_ERROR;
+    if (CONTEXT_BOARD.milesight_mode) {
+        printf("INFO: Skipping radio calibration (milesight_mode, using inherited state)\n");
+        err = LGW_REG_SUCCESS;
+    } else {
+        err = sx1302_radio_calibrate(&CONTEXT_RF_CHAIN[0], CONTEXT_BOARD.clksrc, &CONTEXT_TX_GAIN_LUT[0]);
+        if (err != LGW_REG_SUCCESS) {
+            printf("ERROR: radio calibration failed\n");
+            return LGW_HAL_ERROR;
+        }
     }
 
     /* Setup radios for RX */
     for (i = 0; i < LGW_RF_CHAIN_NB; i++) {
         if (CONTEXT_RF_CHAIN[i].enable == true) {
             /* Reset the radio */
-            err = sx1302_radio_reset(i, CONTEXT_RF_CHAIN[i].type);
-            if (err != LGW_REG_SUCCESS) {
-                printf("ERROR: failed to reset radio %d\n", i);
-                return LGW_HAL_ERROR;
+            if (CONTEXT_BOARD.milesight_mode) {
+                printf("INFO: Skipping radio %d reset (milesight_mode, using inherited state)\n", i);
+                err = LGW_REG_SUCCESS;
+            } else {
+                err = sx1302_radio_reset(i, CONTEXT_RF_CHAIN[i].type);
+                if (err != LGW_REG_SUCCESS) {
+                    printf("ERROR: failed to reset radio %d\n", i);
+                    return LGW_HAL_ERROR;
+                }
             }
 
             /* Setup the radio */
             switch (CONTEXT_RF_CHAIN[i].type) {
                 case LGW_RADIO_TYPE_SX1250:
-                    /* Use upstream sx1250_setup (already has STANDBY_RC retry from v2 patch).
-                     * ms_sx1250_setup has extra calibration steps that interfere with RX.
-                     * The key Milesight adaptations are:
-                     *   - Board detection (ms_detect_board) — done above
-                     *   - DAC skip — done below
-                     *   - TX ur_pa — done in sx1302_send()
-                     */
-                    err = sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
+                    if (CONTEXT_BOARD.milesight_mode) {
+                        /*
+                         * Skip SX1250 re-init in Milesight mode.
+                         * The SX1250 was already fully initialized by native pkt_fw
+                         * (hot-switch). Re-running sx1250_setup() would overwrite the
+                         * inherited PA config, frequency, and RX state.
+                         * TX PA control is handled per-packet via ms_tx_pa_control().
+                         */
+                        printf("INFO: Skipping SX1250_%d setup (milesight_mode, using inherited state)\n", i);
+                        err = LGW_REG_SUCCESS;
+                    } else {
+                        err = sx1250_setup(i, CONTEXT_RF_CHAIN[i].freq_hz, CONTEXT_RF_CHAIN[i].single_input_mode);
+                    }
                     break;
                 case LGW_RADIO_TYPE_SX1255:
                 case LGW_RADIO_TYPE_SX1257:
@@ -940,10 +955,14 @@ int lgw_start(void) {
             }
 
             /* Set radio mode */
-            err = sx1302_radio_set_mode(i, CONTEXT_RF_CHAIN[i].type);
-            if (err != LGW_REG_SUCCESS) {
-                printf("ERROR: failed to set mode for radio %d\n", i);
-                return LGW_HAL_ERROR;
+            if (CONTEXT_BOARD.milesight_mode) {
+                err = LGW_REG_SUCCESS;
+            } else {
+                err = sx1302_radio_set_mode(i, CONTEXT_RF_CHAIN[i].type);
+                if (err != LGW_REG_SUCCESS) {
+                    printf("ERROR: failed to set mode for radio %d\n", i);
+                    return LGW_HAL_ERROR;
+                }
             }
         }
     }
